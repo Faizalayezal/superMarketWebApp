@@ -1,0 +1,406 @@
+// import 'package:cloud_firestore/cloud_firestore.dart';
+// import 'package:flutter/material.dart';
+// import 'package:shivam_super_market/core/utils.dart';
+//
+// class CategoriesPage extends StatefulWidget {
+//   const CategoriesPage({super.key});
+//
+//   @override
+//   State<CategoriesPage> createState() => _CategoriesPageState();
+// }
+//
+// class _CategoriesPageState extends State<CategoriesPage> {
+//   List<Map> categoryList=[];
+//
+//   @override
+//   void initState() {
+//     init();
+//     super.initState();
+//   }
+//
+//   @override
+//   Widget build(BuildContext context) {
+//     return Scaffold(
+//       backgroundColor: backGroundColor,
+//       body: Row(
+//         children: [
+//           /// Main Content
+//           Expanded(
+//             child: Column(
+//               children: [
+//                 Expanded(
+//                   child: Padding(
+//                     padding: const EdgeInsets.all(16),
+//                     child: categoriesView(context),
+//                   ),
+//                 )
+//               ],
+//             ),
+//           )
+//         ],
+//       ),
+//     );
+//   }
+//
+//   Widget menuItem(IconData icon, String title, {bool isSelected = false}) {
+//     return Container(
+//       width: double.infinity,
+//       margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 10),
+//       decoration: BoxDecoration(
+//         color: isSelected ? Colors.deepPurple : Colors.transparent,
+//         borderRadius: BorderRadius.circular(8),
+//       ),
+//       child: ListTile(
+//         dense: false,
+//         leading: Icon(icon, color: Colors.white),
+//         title: Text(title, style: const TextStyle(color: Colors.white)),
+//         trailing: isSelected
+//             ? const Icon(Icons.arrow_forward_ios, color: Colors.white, size: 16)
+//             : null,
+//       ),
+//     );
+//   }
+//
+//   Widget categoriesView(context) {
+//     return Container(
+//       width: double.infinity,
+//       padding: const EdgeInsets.all(16),
+//       decoration: BoxDecoration(
+//         color: Colors.white,
+//         borderRadius: BorderRadius.circular(10),
+//       ),
+//       child: Column(
+//         crossAxisAlignment: CrossAxisAlignment.stretch,
+//         children: [
+//           /// Header
+//           Row(
+//             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+//             children: [
+//               const Text(
+//                 "Categories",
+//                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+//               ),
+//               ElevatedButton(
+//                 onPressed: () async{
+//                   await showDialog(
+//                     context: context,
+//                     builder: (context) => const AddCategoryDialog(),
+//                   );
+//                   init();
+//                 },
+//                 style: ElevatedButton.styleFrom(
+//                   backgroundColor: Colors.blueGrey,
+//                   // minimumSize: Size(double.infinity, 50),
+//                   // backgroundColor: Colors.deepPurple,
+//                 ),
+//                 child: Text("+ Add Category", style: TextStyle(color: Colors.white)),
+//               )
+//             ],
+//           ),
+//
+//           const SizedBox(height: 16),
+//           Expanded(
+//             child: ListView(
+//               children: [
+//                 // Header Row
+//                 Row(
+//                   children: const [
+//                     Expanded(flex: 0, child: Padding(
+//                       padding: EdgeInsets.symmetric(horizontal: 24.0),
+//                       child: Text("#",style: TextStyle(),),
+//                     )),
+//                     Expanded(flex: 4, child: Text("Category Name")),
+//                     Expanded(flex: 1, child: Text("")),
+//                   ],
+//                 ),
+//
+//                 const Divider(),
+//
+//                 // Data Rows
+//                 ...List.generate(categoryList.length, (index) {
+//                   return Column(
+//                     children: [
+//                       Row(
+//                         children: [
+//                           Expanded(
+//                             flex: 0,
+//                             child: Padding(
+//                               padding: EdgeInsets.symmetric(horizontal: 24.0),
+//                               child: Text("${index + 1}"),
+//                             ),
+//                           ),
+//                           Expanded(
+//                             flex: 4,
+//                             child: Text("${categoryList[index]['category']}"),
+//                           ),
+//                           Expanded(
+//                             flex: 1,
+//                             child: PopupMenuButton(
+//                               onSelected: (value) async {
+//                                 if (value == "delete") {
+//                                   FirebaseFirestore.instance
+//                                       .collection("categories")
+//                                       .doc(categoryList[index]['id'])
+//                                       .delete();
+//
+//                                   categoryList.removeAt(index);
+//                                   setState(() {});
+//                                 } else if (value == "edit") {
+//                                   await showDialog(
+//                                     context: context,
+//                                     builder: (context) => AddCategoryDialog(
+//                                       data: categoryList[index],
+//                                     ),
+//                                   );
+//                                   init();
+//                                 }
+//                               },
+//                               itemBuilder: (context) => const [
+//                                 PopupMenuItem(
+//                                     value: "edit", child: Text("Edit")),
+//                                 PopupMenuItem(
+//                                     value: "delete", child: Text("Delete")),
+//                               ],
+//                             ),
+//                           ),
+//                         ],
+//                       ),
+//                       const Divider(),
+//                     ],
+//                   );
+//                 }),
+//               ],
+//             ),
+//           )
+//
+//           /// Table
+//           // Expanded(
+//           //   // child: SingleChildScrollView(
+//           //   //   child: DataTable(
+//           //   //     columnSpacing: 0,
+//           //   //     columns: const [
+//           //   //       DataColumn(label: SizedBox(child: Text("#"))),
+//           //   //       DataColumn(label: Text("Category Name")),
+//           //   //       DataColumn(label: Text("")),
+//           //   //     ],
+//           //   //     rows: List.generate(
+//           //   //         categoryList.length, (index) {
+//           //   //       return DataRow(
+//           //   //           cells: [
+//           //   //         DataCell(Text("${index + 1}")),
+//           //   //          DataCell(Text("${categoryList[index]['category']}")),
+//           //   //         DataCell(
+//           //   //           PopupMenuButton(
+//           //   //             onSelected: (value) async{
+//           //   //               if(value=="delete"){
+//           //   //                 FirebaseFirestore.instance.collection("categories").doc(categoryList[index]['id']).delete();
+//           //   //                 categoryList.removeAt(index);
+//           //   //                 setState(() {
+//           //   //
+//           //   //                 });
+//           //   //               }else if(value=="edit"){
+//           //   //                 await showDialog(
+//           //   //                 context: context,
+//           //   //                 builder: (context) =>AddCategoryDialog(
+//           //   //                   data: categoryList[index],
+//           //   //                 ),
+//           //   //                 );
+//           //   //                 init();
+//           //   //               }
+//           //   //             },
+//           //   //             itemBuilder: (context) => [
+//           //   //               const PopupMenuItem(child: Text("Edit"),value: "edit",),
+//           //   //               const PopupMenuItem(child: Text("Delete"),value: "delete",),
+//           //   //             ],
+//           //   //           ),
+//           //   //         ),
+//           //   //       ]);
+//           //   //     }),
+//           //   //   ),
+//           //   // ),
+//           //   child: LayoutBuilder(
+//           //     builder: (context, constraints) {
+//           //       return DataTable(
+//           //         columnSpacing: 0,
+//           //         columns: const [
+//           //           DataColumn(label: Text("#")),
+//           //           DataColumn(label: Text("Category Name")),
+//           //           DataColumn(label: Text("")),
+//           //         ],
+//           //         rows: List.generate(categoryList.length, (index) {
+//           //           return DataRow(cells: [
+//           //             DataCell(
+//           //               SizedBox(
+//           //                 width: constraints.maxWidth * 0.2, // 20%
+//           //                 child: Text("${index + 1}"),
+//           //               ),
+//           //             ),
+//           //             DataCell(
+//           //               SizedBox(
+//           //                 width: constraints.maxWidth * 0.6, // 60%
+//           //                 child: Text("${categoryList[index]['category']}"),
+//           //               ),
+//           //             ),
+//           //             DataCell(
+//           //               SizedBox(
+//           //                 width: constraints.maxWidth * 0.2, // 20%
+//           //                 child: PopupMenuButton(
+//           //                   onSelected: (value) async {
+//           //                     if (value == "delete") {
+//           //                       FirebaseFirestore.instance
+//           //                           .collection("categories")
+//           //                           .doc(categoryList[index]['id'])
+//           //                           .delete();
+//           //                       categoryList.removeAt(index);
+//           //                       setState(() {});
+//           //                     } else if (value == "edit") {
+//           //                       await showDialog(
+//           //                         context: context,
+//           //                         builder: (context) => AddCategoryDialog(
+//           //                           data: categoryList[index],
+//           //                         ),
+//           //                       );
+//           //                       init();
+//           //                     }
+//           //                   },
+//           //                   itemBuilder: (context) => const [
+//           //                     PopupMenuItem(value: "edit", child: Text("Edit")),
+//           //                     PopupMenuItem(value: "delete", child: Text("Delete")),
+//           //                   ],
+//           //                 ),
+//           //               ),
+//           //             ),
+//           //           ]);
+//           //         }),
+//           //       );
+//           //     },
+//           //   ),
+//           // )
+//         ],
+//       ),
+//     );
+//   }
+//
+//   void init() async{
+//     categoryList.clear();
+//    var res=await FirebaseFirestore.instance.collection("categories").get();
+//    res.docs.forEach((element) {
+//      categoryList.add(element.data());
+//    },);
+//    if(mounted)
+//    setState(() {
+//
+//    });
+//   }
+// }
+//
+// class AddCategoryDialog extends StatefulWidget {
+//   final Map<dynamic, dynamic>? data;
+//   const AddCategoryDialog({super.key,this.data});
+//
+//   @override
+//   State<AddCategoryDialog> createState() => _AddCategoryDialogState();
+// }
+//
+// class _AddCategoryDialogState extends State<AddCategoryDialog> {
+//   late TextEditingController nameController ;
+//
+//   bool type = false;
+//   bool size = false;
+//   bool color = false;
+//   bool capacity = false;
+//
+//   @override
+//   void initState() {
+//     nameController = TextEditingController(text: widget.data!=null?widget.data!['category']:"");
+//     super.initState();
+//   }
+//
+//   @override
+//   Widget build(BuildContext context) {
+//     return Dialog(
+//       shape: RoundedRectangleBorder(
+//         borderRadius: BorderRadius.circular(12),
+//       ),
+//       child: Container(
+//         width: 400,
+//         padding: const EdgeInsets.all(20),
+//         child: Column(
+//           mainAxisSize: MainAxisSize.min,
+//           crossAxisAlignment: CrossAxisAlignment.start,
+//           children: [
+//             /// Title
+//             const Text(
+//               "Add Category",
+//               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+//             ),
+//
+//             const SizedBox(height: 20),
+//
+//             /// Category Name
+//             const Text("Category Name"),
+//             const SizedBox(height: 6),
+//             TextField(
+//               controller: nameController,
+//               decoration: InputDecoration(
+//                 hintText: "Enter category name",
+//                 border: OutlineInputBorder(
+//                   borderRadius: BorderRadius.circular(8),
+//                 ),
+//               ),
+//             ),
+//
+//             const SizedBox(height: 20),
+//
+//             /// Buttons
+//             Row(
+//               mainAxisAlignment: MainAxisAlignment.end,
+//               children: [
+//                 TextButton(
+//                   onPressed: () => Navigator.pop(context),
+//                   child: const Text("Cancel"),
+//                 ),
+//                 const SizedBox(width: 10),
+//                 ElevatedButton(
+//                   onPressed: () async {
+//                     if(widget.data!=null){
+//                     await FirebaseFirestore.instance.collection("categories").doc(widget.data!['id']).set({
+//                         "category":nameController.text,
+//                         "id":widget.data!['id']
+//                       });
+//                       Navigator.pop(context);
+//                     }else{
+//                       var res=await FirebaseFirestore.instance.collection("categories").add({
+//                         "category":nameController.text
+//                       });
+//                       res.update({
+//                         "id":res.id
+//                       });
+//                       Navigator.pop(context);
+//                     }
+//                   },
+//                   style: ElevatedButton.styleFrom(
+//                     backgroundColor: Colors.white,
+//                   ),
+//                   child: const Text("Save"),
+//                 )
+//               ],
+//             )
+//           ],
+//         ),
+//       ),
+//     );
+//   }
+//
+//   /// Checkbox widget
+//   Widget checkboxItem(
+//       String title, bool value, Function(bool?) onChanged) {
+//     return Row(
+//       mainAxisSize: MainAxisSize.min,
+//       children: [
+//         Checkbox(value: value, onChanged: onChanged),
+//         Text(title),
+//       ],
+//     );
+//   }
+// }
