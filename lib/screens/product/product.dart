@@ -1,15 +1,15 @@
 import 'dart:async';
 
-import 'package:button_kit/button_kit.dart';
 import 'package:button_kit/common_import.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
 import 'package:shivam_super_market/core/helper_function.dart';
-import 'package:shivam_super_market/core/utils.dart';
+import 'package:shivam_super_market/widget/PageWrapper.dart';
 
 import 'add_product_screen.dart';
-//
+import 'package:flutter/material.dart';
+import 'package:shivam_super_market/core/config.dart';
+
 class ProductView extends StatefulWidget {
   const ProductView({super.key});
 
@@ -18,526 +18,499 @@ class ProductView extends StatefulWidget {
 }
 
 class _ProductViewState extends State<ProductView> {
-  List<Map> products=[];
+  List<Map> products = [];
   int _selectedTabIndex = 0;
-    int totalProducts = 0;
-  // Colors based on your Navy/Brown logo theme
-  final Color primaryColor = Color(0xFF1B305B);
-  final Color accentColor = Color(0xFFB06A4D);
-  DocumentSnapshot? _lastDocument; // Stores the last item of the current page
+  int totalProducts = 0;
+  DocumentSnapshot? _lastDocument;
   bool _isLoading = false;
-  bool _hasMore = true; // To stop fetching when the database is empty
-  int _pageSize = 10; // Number of items per page
-  ScrollController _scrollController = ScrollController();
-  var searchController=TextEditingController();
-
+  bool _hasMore = true;
+  final int _pageSize = 10;
+  final ScrollController _scrollController = ScrollController();
+  final TextEditingController _searchController = TextEditingController();
+  Timer? _debounce;
 
   @override
   void initState() {
-    getTotalProduct();
-    fetchProduct();
+    super.initState();
+    _getTotalProduct();
+    _fetchProduct();
     _scrollController.addListener(() {
-      if (_scrollController.position.pixels == _scrollController.position.maxScrollExtent) {
-        fetchProduct(isLoadMore: true); // Load next page
+      if (_scrollController.position.pixels ==
+          _scrollController.position.maxScrollExtent) {
+        _fetchProduct(isLoadMore: true);
       }
     });
-    super.initState();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _searchController.dispose();
+    _debounce?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: backGroundColor,
-      appBar: AppBar(
-        centerTitle: false,
-        title:  Text(
-          "Products ( $totalProducts )",
-          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+    return PageWrapper(
+      title: 'Products ($totalProducts)',
+      subtitle: 'Manage your product catalogue.',
+      actions: [
+        ElevatedButton.icon(
+          onPressed: () async {
+            await showDialog(
+              context: context,
+              builder: (_) =>  AddProductPage(),
+            );
+            _fetchProduct();
+            _getTotalProduct();
+          },
+          icon: const Icon(Icons.add_rounded, size: 18),
+          label: const Text('Add Product'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: primaryColor,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          ),
         ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12.0),
-            child: MaterialButton(
-              // type: ButtonType.rounded,
-              color:  Colors.blueGrey,
-              // borderColor: Colors.blueGrey,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadiusGeometry.circular(12)
-              ),
-              padding: EdgeInsets.symmetric(horizontal: 24),
-              child: Text("+Add Product",style: TextStyle(color: Colors.white),),
-              onPressed: () async{
-              await showDialog(
-                context: context,
-                builder: (context) =>  AddProductPage(),
-              );
-              fetchProduct();
-            },
+      ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Tab chips ──────────────────────────────────
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _chip('All', 0, Colors.blue),
+                const SizedBox(width: 8),
+                _chip('Low Stock', 2, Colors.red),
+                const SizedBox(width: 8),
+                _chip('Inactive', 3, Colors.grey),
+              ],
             ),
+          ),
+          const SizedBox(height: 16),
+
+          // ── Search ─────────────────────────────────────
+          TextField(
+            controller: _searchController,
+            onChanged: (v) {
+              if (_debounce?.isActive ?? false) _debounce!.cancel();
+              _debounce = Timer(const Duration(milliseconds: 400), () {
+                if (v.trim().isEmpty) {
+                  _fetchProduct();
+                } else {
+                  _searchProduct();
+                }
+              });
+            },
+            decoration: InputDecoration(
+              hintText: 'Search products...',
+              prefixIcon: const Icon(Icons.search_rounded),
+              filled: true,
+              fillColor: Colors.white,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(30),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(30),
+                borderSide:
+                const BorderSide(color: Color(0xFFDDE4ED), width: 1),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(30),
+                borderSide:
+                BorderSide(color: primaryColor, width: 1.5),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // ── Product list ───────────────────────────────
+          _isLoading && products.isEmpty
+              ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(40),
+                child: CircularProgressIndicator(),
+              ))
+              : products.isEmpty
+              ? Center(
+            child: Padding(
+              padding: const EdgeInsets.all(40),
+              child: Column(
+                children: [
+                  Icon(Icons.inventory_2_outlined,
+                      size: 60,
+                      color: Colors.grey.withOpacity(0.4)),
+                  const SizedBox(height: 12),
+                  const Text('No products found',
+                      style: TextStyle(color: Colors.grey)),
+                ],
+              ),
+            ),
+          )
+              : ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: products.length,
+            itemBuilder: (_, index) =>
+                _productRow(index),
           ),
         ],
       ),
-      body: Container(
-        color: backGroundColor,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header Row
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 0.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(width: 12),
-                        // --- All Chip ---
-                        ChoiceChip(
-                          label: Text("All"),
-                          selected: _selectedTabIndex == 0,
-                          selectedColor: Colors.blueAccent.withOpacity(0.2),
-                          checkmarkColor: Colors.blueAccent,
-                          labelStyle: TextStyle(
-                            color: _selectedTabIndex == 0 ? Colors.blueAccent : Colors.grey,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          onSelected: (selected) {
-                            setState(() => _selectedTabIndex = 0);
-                            fetchProduct();
-                          },
+    );
+  }
+
+  Widget _chip(String label, int tabIndex, Color color) {
+    final selected = _selectedTabIndex == tabIndex;
+    return GestureDetector(
+      onTap: () {
+        setState(() => _selectedTabIndex = tabIndex);
+        _fetchProduct();
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding:
+        const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? color.withOpacity(0.12) : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+              color: selected ? color : const Color(0xFFDDE4ED)),
+        ),
+        child: Text(label,
+            style: TextStyle(
+                color: selected ? color : Colors.grey[600],
+                fontWeight: selected
+                    ? FontWeight.bold
+                    : FontWeight.normal,
+                fontSize: 13)),
+      ),
+    );
+  }
+
+  Widget _productRow(int index) {
+    final p = products[index];
+    final bool inactive = p['is_active'] != true;
+    final int stock = int.tryParse(p['stock'].toString()) ?? 0;
+    final bool lowStock =
+        stock <= (int.tryParse(p['low_stock']?.toString() ?? '5') ?? 5);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: inactive ? const Color(0xFFF5F5F5) : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: inactive
+              ? Colors.grey.shade300
+              : lowStock
+              ? Colors.red.shade100
+              : const Color(0xFFE8EDF2),
+        ),
+      ),
+      child: Row(
+        children: [
+          // Info
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    if (inactive)
+                      Container(
+                        margin: const EdgeInsets.only(right: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(4),
                         ),
-                        SizedBox(width: 12),
-                        // --- Low Stock Chip ---
-                        ChoiceChip(
-                          label: Text("Low Stock"),
-                          selected: _selectedTabIndex == 2,
-                          selectedColor: Colors.red.withOpacity(0.2),
-                          checkmarkColor: Colors.red,
-                          labelStyle: TextStyle(
-                            color: _selectedTabIndex == 2 ? Colors.red : Colors.grey,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          onSelected: (selected) {
-                            setState(() => _selectedTabIndex = 2);
-                            fetchProduct();
-                          },
+                        child: const Text('Inactive',
+                            style: TextStyle(
+                                color: Colors.grey, fontSize: 10)),
+                      ),
+                    if (lowStock && !inactive)
+                      Container(
+                        margin: const EdgeInsets.only(right: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
                         ),
-                        SizedBox(width: 12),
-                        // --- Low Stock Chip ---
-                        ChoiceChip(
-                          label: Text("Inactive"),
-                          selected: _selectedTabIndex == 3,
-                          selectedColor: Colors.red.withOpacity(0.2),
-                          checkmarkColor: Colors.red,
-                          labelStyle: TextStyle(
-                            color: _selectedTabIndex == 3 ? Colors.red : Colors.grey,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          onSelected: (selected) {
-                            setState(() => _selectedTabIndex = 3);
-                            fetchProduct();
-                          },
-                        ),
-                      ],
+                        child: const Text('Low Stock',
+                            style: TextStyle(
+                                color: Colors.red, fontSize: 10)),
+                      ),
+                    Flexible(
+                      child: Text(p['name'],
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14),
+                          overflow: TextOverflow.ellipsis),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: TextField(
-                        controller: searchController,
-                        onSubmitted: (value) {
-                          try{
-                            FirebaseFirestore.instance.collection("products").where("barcode",isEqualTo: searchController.text).get().then((result) {
-                              products.clear();
-                              result.docs.forEach((element) {
-                                products.add(element.data());
-                                setState(() {
-
-                                });
-                              },);
-                              // value
-                            },);
-                          }catch(e,s){
-                            print("CheckSearchErro:::$e===$s");
-
-                          }
-                        },
-                        onChanged: (value) {
-                          if(searchController.text.trim().isEmpty){
-                            fetchProduct();
-                            return;
-                          }else{
-                            searchProduct();
-                          }
-                        },
-                        decoration: InputDecoration(
-                          hintText: "Search Product...",
-                          prefixIcon: Icon(Icons.search),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(30)),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-
-              // Product List
-              Expanded(
-                child: ListView.builder(
-                  controller: _scrollController,
-                  itemCount: products.length,
-                  itemBuilder: (context, index) {
-                    return Container(
-                      decoration: BoxDecoration(
-                        color:
-                        products[index]['is_active']!=true?Colors.grey.shade300:
-                        Colors.white,
-                        borderRadius: BorderRadius.circular(12)
-                      ),
-                      margin: EdgeInsets.only(bottom: 12),
-                      padding: EdgeInsets.all(16),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        mainAxisSize: MainAxisSize.max,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text("${products[index]['name']}"),
-                              Text("Price: ₹${products[index]['selling_price']}"),
-                              Text("Stock: ${products[index]['stock']} ${products[index]['unit']}"),
-                            ]
-                          ),
-                          Row(
-                            children: [
-                              IconButton(
-                                icon: Icon(Icons.checklist),
-                                onPressed: () async{
-                                  showUpdateStockDialog(
-                                    context,
-                                    name:products[index]['name'],
-                                    initialStock: int.tryParse(products[index]['stock'].toString())??0,
-                                    initialLowStock:  int.tryParse(products[index]['low_stock'].toString())??0,
-                                    onSubmit: (stock, lowStock) {
-                                      FirebaseFirestore.instance.collection("products").doc(products[index]['id']).update({
-                                        "low_stock":lowStock,
-                                        "stock":stock,
-                                      });
-                                      fetchProduct();
-                                    },
-                                  );
-                                },
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.edit),
-                                onPressed: () async{
-                                  await showDialog(
-                                    context: context,
-                                    builder: (context) =>AddProductPage(
-                                        map:products[index]
-                                    ),
-                                  );
-                                  fetchProduct();
-                                },
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete),
-                                onPressed: () async{
-                                  bool confirm = await showDeleteDialog(context);
-                                  if(confirm){
-                                    FirebaseFirestore.instance.collection("products").doc(products[index]['id']).delete();
-                                    products.removeAt(index);
-                                    fetchProduct();
-                                  }
-                                },
-                              ),
-                            ],
-                          )
-                        ],
-                      ),
-                    );
-                  },
+                  ],
                 ),
-              ),
+                const SizedBox(height: 4),
+                Text(
+                  '₹${p['selling_price']}  •  Stock: $stock ${p['unit'] ?? ''}',
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey[600]),
+                ),
+                if (p['barcode'] != null && p['barcode'].toString().isNotEmpty)
+                  Text('Barcode: ${p['barcode']}',
+                      style: const TextStyle(
+                          fontSize: 11, color: Colors.grey)),
+              ],
+            ),
+          ),
+
+          // Actions
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _actionBtn(Icons.checklist_rounded, Colors.blue, () {
+                _showUpdateStockDialog(
+                  context,
+                  name: p['name'],
+                  initialStock:
+                  int.tryParse(p['stock'].toString()) ?? 0,
+                  initialLowStock:
+                  int.tryParse(p['low_stock'].toString()) ?? 0,
+                  onSubmit: (stock, lowStock) {
+                    FirebaseFirestore.instance
+                        .collection("products")
+                        .doc(p['id'])
+                        .update({
+                      "stock": stock,
+                      "low_stock": lowStock,
+                      "is_low_stock": stock <= lowStock,
+                    });
+                    _fetchProduct();
+                  },
+                );
+              }),
+              _actionBtn(Icons.edit_rounded, Colors.orange, () async {
+                await showDialog(
+                  context: context,
+                  builder: (_) => AddProductPage(map: p as Map<dynamic, dynamic>),
+                );
+                _fetchProduct();
+              }),
+              _actionBtn(Icons.delete_rounded, Colors.red, () async {
+                final confirm = await showDeleteDialog(context);
+                if (confirm) {
+                  FirebaseFirestore.instance
+                      .collection("products")
+                      .doc(p['id'])
+                      .delete();
+                  setState(() => products.removeAt(index));
+                  _getTotalProduct();
+                }
+              }),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _actionBtn(
+      IconData icon, Color color, VoidCallback onTap) {
+    return Tooltip(
+      message: icon == Icons.checklist_rounded
+          ? 'Update Stock'
+          : icon == Icons.edit_rounded
+          ? 'Edit'
+          : 'Delete',
+      child: Material(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Icon(icon, color: color, size: 18),
           ),
         ),
       ),
     );
   }
 
-  void fetchProduct({bool isLoadMore = false}) async {
-
+  void _fetchProduct({bool isLoadMore = false}) async {
+    if (_isLoading) return;
     setState(() => _isLoading = true);
 
-    // 1. Reset everything if we are refreshing the tab (not loading more)
     if (!isLoadMore) {
       products.clear();
       _lastDocument = null;
       _hasMore = true;
     }
 
-    // 2. Build the Base Query based on the tab
-    Query query = FirebaseFirestore.instance.collection("products");
+    Query query =
+    FirebaseFirestore.instance.collection("products");
 
     if (_selectedTabIndex == 0) {
-      query = query;
-    } else if (_selectedTabIndex == 1) {
-      query = query.where("is_active", isEqualTo: true)
-          .where("expiry_date", isLessThan: Timestamp.now());
+      // all
     } else if (_selectedTabIndex == 2) {
-      query = query.where("is_active", isEqualTo: true)
+      query = query
+          .where("is_active", isEqualTo: true)
           .where("is_low_stock", isEqualTo: true);
     } else if (_selectedTabIndex == 3) {
       query = query.where("is_active", isEqualTo: false);
     }
 
-    // 3. Add Ordering and Pagination
-    // Note: Order by a field is required for startAfterDocument to work reliably
     query = query.orderBy("name").limit(_pageSize);
 
     if (isLoadMore && _lastDocument != null) {
       query = query.startAfterDocument(_lastDocument!);
     }
 
-    // 4. Execute the Query
     try {
-      QuerySnapshot querySnapshot = await query.get();
-
-      if (querySnapshot.docs.isNotEmpty) {
-        _lastDocument = querySnapshot.docs.last;
-
+      final snap = await query.get();
+      if (snap.docs.isNotEmpty) {
+        _lastDocument = snap.docs.last;
         setState(() {
-          for (var doc in querySnapshot.docs) {
+          for (var doc in snap.docs) {
             products.add(doc.data() as Map<String, dynamic>);
           }
         });
       }
-
-      // If we fetched fewer items than the page size, there are no more left
-      if (querySnapshot.docs.length < _pageSize) {
-        _hasMore = false;
-      }
-    } catch (e) {
-      print("Pagination Error: $e");
-    } finally {
-      setState(() => _isLoading = false);
+      if (snap.docs.length < _pageSize) _hasMore = false;
+    } catch (_) {} finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  Widget _buildDropdown({
-    required String? value,
-    required String hint,
-    required List<String> items,
-    required Function(String?) onChanged,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: DropdownButtonFormField<String>(
-        dropdownColor: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        value: value,
-        decoration: InputDecoration(
-          labelText: hint,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-        items: items
-            .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-            .toList(),
-        onChanged: onChanged,
-        validator: (value) => value == null ? "Select $hint" : null,
-      ),
-    );
-  }
-
-  // searchProduct() async{
-  //   products.clear();
-  //   _lastDocument=null; // Stores the last item of the current page
-  //   _isLoading = false;
-  //   _hasMore = true;
-  //   if(searchController.text.trim().isEmpty) return fetchProduct();
-  //   String text=searchController.text;
-  //   var query = FirebaseFirestore.instance.collection("products")
-  //       .where("is_active", isEqualTo: true)
-  //       .where("sort_name", isEqualTo: searchController.text)
-  //       .where("name", isEqualTo: searchController.text)
-  //       .where("category", isEqualTo: searchController.text)
-  //       .where(
-  //       "barcode",isEqualTo: text
-  //   );
-  //   QuerySnapshot snapshot = await query.get();
-  //   setState(() {
-  //     for (var doc in snapshot.docs) {
-  //       products.add(doc.data() as Map<String, dynamic>);
-  //     }
-  //   });
-  // }
-  searchProduct() async{
+  void _searchProduct() async {
     products.clear();
-    _lastDocument=null; // Stores the last item of the current page
-    _isLoading = false;
+    _lastDocument = null;
     _hasMore = true;
-    if(searchController.text.trim().isEmpty) return fetchProduct();
-    String text=searchController.text;
+    final text = _searchController.text;
+    if (text.trim().isEmpty) return _fetchProduct();
 
     try {
-      List<Map<String, dynamic>> tempList = [];
-
-      final collection = FirebaseFirestore.instance.collection("products");
-
-
-      // 🔹 2. Name Search (using sort_name for lowercase match)
-      var nameSnap = await collection
-          // .where("sort_name", isEqualTo: text.toUpperCase())
-          .where('sort_name', isGreaterThanOrEqualTo: text.toUpperCase())
-          .where('sort_name', isLessThanOrEqualTo: text.toUpperCase() + '\uf8ff')
-
-      // .where("name", isLessThanOrEqualTo: text + '\uf8ff')
-          .where("is_active", isEqualTo: true)
+      final nameSnap = await FirebaseFirestore.instance
+          .collection("products")
+          .where('sort_name',
+          isGreaterThanOrEqualTo: text.toUpperCase())
+          .where('sort_name',
+          isLessThanOrEqualTo: text.toUpperCase() + '\uf8ff')
           .limit(20)
           .get();
 
-      print("📝 Name results: ${nameSnap.docs.length}");
-
-
-
-      // 🔥 Merge all results
-      for (var doc in [
-        ...nameSnap.docs,
-      ]) {
-        tempList.add(doc.data() as Map<String, dynamic>);
-      }
-
-      // 🔥 Remove duplicates using product ID
       final Map<String, Map<String, dynamic>> uniqueMap = {};
-
-      for (var item in tempList) {
-        if (item['id'] != null) {
-          uniqueMap[item['id']] = item;
-        }
+      for (var doc in nameSnap.docs) {
+        final data = doc.data() as Map<String, dynamic>;
+        if (data['id'] != null) uniqueMap[data['id']] = data;
       }
 
-      print("✅ Final unique products: ${uniqueMap.length}");
-
-      setState(() {
-        products = uniqueMap.values.toList();
-        _isLoading = false;
-      });
-
-    } catch (e) {
-      print("❌ Search Error: $e");
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          products = uniqueMap.values.toList();
+          _isLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
     }
-    //
-    // var query = FirebaseFirestore.instance.collection("products")
-    //     .where("is_active", isEqualTo: true)
-    //     .where("sort_name", isEqualTo: searchController.text)
-    //     .where("name", isEqualTo: searchController.text)
-    //     .where("category", isEqualTo: searchController.text)
-    //     .where(
-    //   "barcode",isEqualTo: text
-    // );
-    // QuerySnapshot snapshot = await query.get();
-    // setState(() {
-    //   for (var doc in snapshot.docs) {
-    //     products.add(doc.data() as Map<String, dynamic>);
-    //   }
-    // });
   }
 
-  void getTotalProduct() async{
-    var res=await FirebaseFirestore.instance.collection("products").where("is_active", isEqualTo: true).get();
-    setState(() {
-      totalProducts=res.docs.length;
-    });
+  void _getTotalProduct() async {
+    final res = await FirebaseFirestore.instance
+        .collection("products")
+        .where("is_active", isEqualTo: true)
+        .get();
+    if (mounted) setState(() => totalProducts = res.docs.length);
   }
 
-  void showUpdateStockDialog(
+  void _showUpdateStockDialog(
       BuildContext context, {
         required int initialStock,
         required int initialLowStock,
-        required Function(int stock, int lowStock) onSubmit, required String name,
+        required Function(int, int) onSubmit,
+        required String name,
       }) {
-    final TextEditingController stockController =
+    final stockCtrl =
     TextEditingController(text: initialStock.toString());
-
-    final TextEditingController lowStockController =
+    final lowStockCtrl =
     TextEditingController(text: initialLowStock.toString());
 
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title:  Text("Update Stock"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(width: double.infinity,),
-              Row(
-                children: [
-                  Text("Product Name: ",style: TextStyle(fontSize: 14),),
-                  Expanded(child: Text(name,style: TextStyle(fontWeight: FontWeight.bold,fontSize: 18),)),
-                ],
-              ),
-              SizedBox(height: 24,),
-              // Stock Field
-              TextField(
-                autofocus: true,
-                controller: stockController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: "Stock Quantity",
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // Low Stock Field
-              TextField(
-                controller: lowStockController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: "Low Stock Limit",
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Cancel"),
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16)),
+        title: const Text('Update Stock'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(width: double.infinity),
+            RichText(
+                text: TextSpan(children: [
+                  const TextSpan(
+                      text: 'Product: ',
+                      style: TextStyle(
+                          color: Colors.grey, fontSize: 13)),
+                  TextSpan(
+                      text: name,
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: primaryColor,
+                          fontSize: 15)),
+                ])),
+            const SizedBox(height: 20),
+            TextField(
+              autofocus: true,
+              controller: stockCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                  labelText: 'Stock Quantity',
+                  border: OutlineInputBorder()),
             ),
-            ElevatedButton(
-              onPressed: () {
-                final int stock =
-                    int.tryParse(stockController.text.trim()) ?? 0;
-                final int lowStock =
-                    int.tryParse(lowStockController.text.trim()) ?? 0;
-
-                onSubmit(stock, lowStock);
-                Navigator.pop(context);
-              },
-              child: const Text("Update"),
+            const SizedBox(height: 12),
+            TextField(
+              controller: lowStockCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                  labelText: 'Low Stock Limit',
+                  border: OutlineInputBorder()),
             ),
           ],
-        );
-      },
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final s =
+                  int.tryParse(stockCtrl.text.trim()) ?? 0;
+              final l =
+                  int.tryParse(lowStockCtrl.text.trim()) ?? 0;
+              onSubmit(s, l);
+              Navigator.pop(context);
+            },
+            style: ElevatedButton.styleFrom(
+                backgroundColor: primaryColor,
+                foregroundColor: Colors.white),
+            child: const Text('Update'),
+          ),
+        ],
+      ),
     );
   }
-
 }
 
 // class TaxDropdown extends StatefulWidget {

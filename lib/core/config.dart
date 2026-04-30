@@ -1,23 +1,29 @@
 import 'package:button_kit/common_import.dart';
 
-Color primaryColor=Color(0xff013d69);
-Color secondaryColor=Color(0xfffe6b01);
-Color backgroundColor=Color(0xffB9D9EB);
-Color cardColor=Color(0xff87CEFA);
+import 'package:flutter/material.dart';
 
-const superMarketTitle="SHIVAM SUPER MARKET";
-const billAddress="Metoda GIDC,Kalawad Road,Rajkot";
-const telNumber="+91 96646 43973";
+Color primaryColor   = const Color(0xFF013D69);
+Color secondaryColor = const Color(0xFFFE6B01);
+Color backgroundColor = const Color(0xFFEFF4F8);
+Color cardColor      = const Color(0xFFDCECF8);
+Color sidebarColor   = const Color(0xFF0D2137);
 
-var myDecoration=BoxDecoration(
-    color: cardColor,
-    borderRadius: BorderRadius.circular(12),
-    boxShadow: [
-      BoxShadow(
-          color: Colors.black,
-          spreadRadius: 1,
-          blurRadius: 1
-        // offset: Offset(0, 2)
-      )
-    ]
+const String superMarketTitle = "SHIVAM SUPER MARKET";
+const String billAddress      = "Metoda GIDC, Kalawad Road, Rajkot";
+const String telNumber        = "+91 96646 43973";
+
+// Breakpoints
+const double kMobileBreak  = 600;
+const double kTabletBreak  = 1024;
+
+BoxDecoration myDecoration = BoxDecoration(
+  color: Colors.white,
+  borderRadius: BorderRadius.circular(14),
+  boxShadow: [
+    BoxShadow(
+      color: Colors.black.withOpacity(0.07),
+      blurRadius: 16,
+      offset: const Offset(0, 4),
+    ),
+  ],
 );

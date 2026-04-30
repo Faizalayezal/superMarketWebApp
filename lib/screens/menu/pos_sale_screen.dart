@@ -5,805 +5,960 @@ import 'package:shivam_super_market/common_import.dart';
 import 'package:shivam_super_market/core/helper_function.dart';
 import 'package:shivam_super_market/core/services/printer_service.dart' show PrinterService;
 
+// ══════════════════════════════════════════════════════════════
+// POSSaleScreen
+// ✅ FIX 3: AutomaticKeepAliveClientMixin — survives IndexedStack + parent rebuilds
+// ✅ FIX 4: Category chip setState fix
+// ══════════════════════════════════════════════════════════════
 class POSSaleScreen extends StatefulWidget {
   final String? docId;
   final Map<String, dynamic>? saleData;
-
   const POSSaleScreen({super.key, this.docId, this.saleData});
 
   @override
   _POSSaleScreenState createState() => _POSSaleScreenState();
 }
 
-class _POSSaleScreenState extends State<POSSaleScreen> {
+// ✅ FIX 3: Add AutomaticKeepAliveClientMixin
+// This keeps the widget alive inside IndexedStack even when not visible.
+// Without this, Flutter may still dispose the widget to free memory.
+class _POSSaleScreenState extends State<POSSaleScreen>
+    with AutomaticKeepAliveClientMixin {
+
+  // ✅ FIX 3: Must override wantKeepAlive and return true
+  @override
+  bool get wantKeepAlive => true;
+
   final PrinterService _printerService = PrinterService();
-  DocumentSnapshot? _lastDocument; // Stores the last item of the current page
+  DocumentSnapshot? _lastDocument;
   bool _isLoading = false;
-  bool _hasMore = true; // To stop fetching when the database is empty
-  int _pageSize = 10; // Number of items per page
-  ScrollController itemsScrollCount = ScrollController();
-  ScrollController _scrollController = ScrollController();
-  final FocusNode searchFocusNode = FocusNode();
-  var searchController = TextEditingController();
+  bool _hasMore = true;
+  final int _pageSize = 10;
+  final ScrollController _itemsScrollCtrl = ScrollController();
+  final ScrollController _scrollController = ScrollController();
+  final FocusNode _searchFocusNode = FocusNode();
+  final TextEditingController _searchController = TextEditingController();
   Timer? _debounce;
-  String selectedPaymentMethod = "Cash";
+  String _selectedPaymentMethod = "Cash";
   final TextEditingController _discountController = TextEditingController();
-  final TextEditingController _extraPurchaseController = TextEditingController();
-  // List<Map<String, double>> extraItems = [];
+  final TextEditingController _extraPurchaseController =
+  TextEditingController();
+  List<Map<String, dynamic>> cartItems = [];
+  List<Map<String, dynamic>> products = [];
+  String? selectedCategory;
+  List<Map> categoryList = [];
 
   @override
   void initState() {
+    super.initState();
     _scrollController.addListener(() {
       if (_scrollController.position.pixels ==
           _scrollController.position.maxScrollExtent) {
-        fetchProduct(isLoadMore: true); // Load next page
+        _fetchProduct(isLoadMore: true);
       }
     });
-    getCatList();
-    fetchProduct();
+    _getCatList();
+    _fetchProduct();
     if (widget.docId != null) {
-      cartItems = List<Map<String, dynamic>>.from(widget.saleData!['order']);
-      selectedPaymentMethod = widget.saleData!['payment_method'] ?? "";
+      cartItems =
+      List<Map<String, dynamic>>.from(widget.saleData!['order']);
+      _selectedPaymentMethod = widget.saleData!['payment_method'] ?? "";
       calculateTotal();
     }
-    super.initState();
   }
 
   @override
   void dispose() {
-    _debounce?.cancel(); // Cancel timer
-    searchController.dispose();
+    _debounce?.cancel();
+    _searchController.dispose();
+    _scrollController.dispose();
+    _itemsScrollCtrl.dispose();
     super.dispose();
   }
 
-  searchProduct() async {
-    products.clear();
-    _lastDocument = null; // Stores the last item of the current page
-    _isLoading = false;
-    _hasMore = true;
-    if (searchController.text.trim().isEmpty) return fetchProduct();
-    String text = searchController.text;
-
-    try {
-      List<Map<String, dynamic>> tempList = [];
-
-      final collection = FirebaseFirestore.instance.collection("products");
-
-      // 🔹 1. Barcode Search (Exact match - highest priority)
-      var barcodeSnap = await collection
-          .where("barcode", isEqualTo: text)
-          .where("is_active", isEqualTo: true)
-          .get();
-
-      print("📦 Barcode results: ${barcodeSnap.docs.length}");
-
-      // 🔹 2. Name Search (using sort_name for lowercase match)
-      var nameSnap = await collection
-          .where('sort_name', isGreaterThanOrEqualTo: text.toUpperCase())
-          .where(
-            'sort_name',
-            isLessThanOrEqualTo: text.toUpperCase() + '\uf8ff',
-          )
-          .where("is_active", isEqualTo: true)
-          .limit(20)
-          .get();
-
-      print("📝 Name results: ${nameSnap.docs.length}");
-
-      // 🔹 3. Category Search
-      var categorySnap = await collection
-          .where("category", isEqualTo: text)
-          .where("is_active", isEqualTo: true)
-          .get();
-
-      print("📂 Category results: ${categorySnap.docs.length}");
-
-      // 🔥 Merge all results
-      for (var doc in [
-        ...barcodeSnap.docs,
-        ...nameSnap.docs,
-        ...categorySnap.docs,
-      ]) {
-        tempList.add(doc.data() as Map<String, dynamic>);
-      }
-
-      // 🔥 Remove duplicates using product ID
-      final Map<String, Map<String, dynamic>> uniqueMap = {};
-
-      for (var item in tempList) {
-        if (item['id'] != null) {
-          uniqueMap[item['id']] = item;
-        }
-      }
-
-      print("✅ Final unique products: ${uniqueMap.length}");
-
-      setState(() {
-        products = uniqueMap.values.toList();
-        _isLoading = false;
-      });
-    } catch (e) {
-      print("❌ Search Error: $e");
-      setState(() => _isLoading = false);
-    }
-  }
-
-  // List to store items added to the bill
-  List<Map<String, dynamic>> cartItems = [];
-  // Map<String, dynamic> extraCharges = {};
-
-  // Example Product Data (In real app, fetch this from your Firestore fetchProduct)
-  List<Map<String, dynamic>> products = [];
-
-  String? selectedCategory;
-  List<Map> categoryList = [];
-
-  void getCatList() async {
+  void _getCatList() async {
     categoryList.clear();
-    var res = await FirebaseFirestore.instance.collection("categories").get();
-    res.docs.forEach((element) {
-      categoryList.add(element.data());
-    });
+    final res =
+    await FirebaseFirestore.instance.collection("categories").get();
+    for (var e in res.docs) {
+      categoryList.add(e.data());
+    }
     if (mounted) setState(() {});
   }
 
-  void addToCart(Map<String, dynamic> product) {
+  Future<void> _searchProduct(String text) async {
+    final query = text.trim();
 
-    // Ensure your product maps have an 'id' key from Firestore
-    final String productId = product['id'];
+    if (query.isEmpty) {
+      return _fetchProduct();
+    }
 
     setState(() {
-      // Search the cart for the specific ID
-      int index = cartItems.indexWhere((item) => item['id'] == productId);
-
-      if (index != -1) {
-        // If found, just increment the quantity
-        cartItems[index]['qty'] = cartItems[index]['qty'] + 1;
-      } else {
-        // If not found, add as a new entry with quantity 1
-        // We use Map.of to ensure we aren't modifying the original reference
-        cartItems.add(Map<String, dynamic>.from({...product, "qty": 1}));
-        itemsScrollCount.animateTo(itemsScrollCount.position.maxScrollExtent, duration: Duration(milliseconds: 500), curve: Curves.linear);
-      }
+      _isLoading = true;
+      products.clear();
     });
+
+    try {
+      final queryText = query.toUpperCase();
+
+      final collection = FirebaseFirestore.instance.collection("products");
+
+      // 🔥 MAIN SEARCH
+      final nameSnap = await collection
+          .where("is_active", isEqualTo: true)
+          .orderBy("sort_name")
+          .startAt([queryText])
+          .endAt([queryText + '\uf8ff'])
+          .limit(20)
+          .get();
+
+      // 🔥 BARCODE SEARCH
+      final barcodeSnap = await collection
+          .where("barcode", isEqualTo: query)
+          .where("is_active", isEqualTo: true)
+          .get();
+
+      // 🔥 MERGE + REMOVE DUPLICATE
+      final Map<String, Map<String, dynamic>> unique = {};
+
+      for (var doc in [...nameSnap.docs, ...barcodeSnap.docs]) {
+        unique[doc.id] = doc.data();
+      }
+
+      setState(() {
+        products = unique.values.toList();
+        _hasMore = false;
+      });
+
+    } catch (e, st) {
+      debugPrint("❌ Search Error: $e");
+      debugPrintStack(stackTrace: st);
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+  Future<void> _fallbackSearch(String query) async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection("products")
+          .where("is_active", isEqualTo: true)
+          .limit(50)
+          .get();
+
+      final lower = query.toLowerCase();
+
+      final filtered = snap.docs.where((doc) {
+        final name = (doc['name'] ?? "").toString().toLowerCase();
+        return name.contains(lower);
+      }).map((e) => e.data()).toList();
+
+      setState(() {
+        products = filtered;
+      });
+
+    } catch (e) {
+      debugPrint("❌ Fallback Error: $e");
+    }
   }
 
-  String getPromotionMessage(Map item) {
-    return "";
+  void _addToCart(Map<String, dynamic> product) {
+    final String productId = product['id'];
+    setState(() {
+      int index = cartItems.indexWhere((item) => item['id'] == productId);
+      if (index != -1) {
+        cartItems[index]['qty'] = cartItems[index]['qty'] + 1;
+      } else {
+        cartItems.add(Map<String, dynamic>.from({...product, "qty": 1}));
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_itemsScrollCtrl.hasClients) {
+            _itemsScrollCtrl.animateTo(
+              _itemsScrollCtrl.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 400),
+              curve: Curves.easeOut,
+            );
+          }
+        });
+      }
+    });
   }
 
   double calculateTotal() {
-    num discount = num.tryParse(_discountController.text) ?? 0.0;
-    num additionalCharges = num.tryParse(_extraPurchaseController.text) ?? 0.0;
-    num totalSum = 0.0;
-    totalSum = cartItems.fold(0.0, (sum, item) {
-      double unitPrice = item['selling_price'] ?? 0.0;
-      int qty = item['qty'] ?? 0;
-      double itemTotal = 0.0;
-
-      // CASE 1: Combo Pricing (e.g., 5 for 105)
+    final num discount = num.tryParse(_discountController.text) ?? 0.0;
+    final num extra = num.tryParse(_extraPurchaseController.text) ?? 0.0;
+    num total = cartItems.fold(0.0, (sum, item) {
+      final double unitPrice = item['selling_price'] ?? 0.0;
+      final int qty = item['qty'] ?? 0;
+      double itemTotal = 0;
       if (item['promotion'] == 'Combo' &&
           item['combo_qty'] != null &&
           qty >= int.parse(item['combo_qty'])) {
-        int comboCount =
-            int.tryParse("${qty ~/ int.parse(item['combo_qty'])}") ??
-            0; // Remaining single items
-        int remainingQty =
-            int.tryParse("${qty % int.parse(item['combo_qty'])}") ??
-            0; // Remaining single items
-        double comboPrice = double.parse(item['combo_price'].toString());
-
-        itemTotal = (comboCount * comboPrice) + (remainingQty * unitPrice);
-      }
-      // CASE 3: Standard Pricing
-      else {
+        final int comboCount = qty ~/ int.parse(item['combo_qty']);
+        final int remaining = qty % int.parse(item['combo_qty']);
+        final double comboPrice =
+        double.parse(item['combo_price'].toString());
+        itemTotal = (comboCount * comboPrice) + (remaining * unitPrice);
+      } else {
         itemTotal = qty * unitPrice;
       }
-
       return sum + itemTotal;
     });
-    num a = totalSum - discount+additionalCharges;
-    return a.toDouble();
+    return (total - discount + extra).toDouble();
   }
 
-  double savedAmountTotal() {
-    double totalSaved = 0;
-
+  double _savedAmountTotal() {
+    double saved = 0;
     for (var item in cartItems) {
-      double mrp = double.parse(item['mrp'].toString());
-      double sellingPrice = double.parse(item['selling_price'].toString());
-      int qty = int.parse(item['qty'].toString());
-
-      totalSaved += (mrp - sellingPrice) * qty;
+      final double mrp = double.parse(item['mrp'].toString());
+      final double sp = double.parse(item['selling_price'].toString());
+      final int qty = int.parse(item['qty'].toString());
+      saved += (mrp - sp) * qty;
     }
-    return totalSaved;
+    return saved;
+  }
+
+  double _getLineItemTotal(Map item) {
+    final double price = (item['selling_price'] ?? 0).toDouble();
+    final int qty = item['qty'] ?? 0;
+    return qty * price;
   }
 
   @override
   Widget build(BuildContext context) {
+    // ✅ FIX 3: super.build() REQUIRED when using AutomaticKeepAliveClientMixin
+    super.build(context);
 
     return Scaffold(
+      backgroundColor: backgroundColor,
       appBar: AppBar(
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [Text("$superMarketTitle - POS")],
+        backgroundColor: primaryColor,
+        title: Text(
+          '$superMarketTitle — POS',
+          style: const TextStyle(
+              color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
         ),
-        backgroundColor: Colors.blueGrey.shade200,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.print_outlined, color: Colors.white),
+            tooltip: 'Print',
+            onPressed: () async {
+              try {
+                await _printerService.printReceipt(
+                  invId:
+                  "INV_${printDate(date: DateTime.now().toString(), format: "ddmmyyhhmmss")}",
+                  cartItems: List.from(cartItems),
+                  total: calculateTotal(),
+                  savedOnMRP: _savedAmountTotal(),
+                  paymentMethod: _selectedPaymentMethod,
+                  extraCharges: {},
+                );
+              } catch (_) {}
+            },
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
-      backgroundColor: backGroundColor,
-      body: Row(
-        children: [
-          // --- LEFT SIDE: SELECTED ITEMS (CART) ---
-          Expanded(
-            flex: 2,
-            child: Container(
-              color: Colors.blueGrey.shade50,
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(10.0),
-                    child: Text(
-                      "Current Sale",
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  Divider(),
-                  Expanded(
-                    child: ListView.builder(
-                      controller: itemsScrollCount,
-                      padding: EdgeInsets.zero,
-                      itemCount: cartItems.length,
-                      itemBuilder: (context, index) {
-                        // final item = cartItems[index];
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: ListTile(
-                                title: Row(
-                                  children: [
-                                    Container(
-                                        decoration: BoxDecoration(
-                                          color: Colors.green,
-                                          shape: BoxShape.circle
-                                        ),
-                                        padding: EdgeInsets.all(8),
-                                        child: Center(child: Text("${index+1}",style: TextStyle(fontWeight: FontWeight.bold,fontSize: 12),))),
-                                    Text(" "+cartItems[index]['name']),
-                                  ],
-                                ),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Text(
-                                          "₹${cartItems[index]['selling_price']} x ",
-                                        ),
-                                        SizedBox(width: 12),
-                                        InputQty(
-                                          key: ValueKey(
-                                            "${cartItems[index]['id']}_${cartItems[index]['qty']}",
-                                          ),
-                                          maxVal: 999,
-                                          initVal: cartItems[index]['qty'],
-                                          minVal: 1,
-                                          steps: 1,
-                                          onQtyChanged: (val) {
-                                            cartItems[index]['qty'] = val;
-                                            setState(() {});
-                                          },
-                                        ),
-                                      ],
-                                    ),
+      body: LayoutBuilder(builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 700;
+        return isMobile ? _buildMobileBody() : _buildDesktopBody();
+      }),
+    );
+  }
 
-                                    /// 🔥 Promotion Message
-                                    if (getPromotionMessage(
-                                      cartItems[index],
-                                    ).isNotEmpty)
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 4),
-                                        child: Text(
-                                          getPromotionMessage(
-                                            cartItems[index],
-                                          ).toString(),
-                                          maxLines: 2,
-                                          style: TextStyle(
-                                            color: Colors.green,
-                                            overflow: TextOverflow.ellipsis,
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                trailing: Text(
-                                  "₹${getLineItemTotal(cartItems[index])}",
-                                  style: TextStyle(fontWeight: FontWeight.bold),
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              onPressed: () {
-                                cartItems.removeAt(index);
-                                setState(() {});
-                              },
-                              icon: Icon(Icons.close, color: Colors.red),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
-                  Container(
-                    padding: EdgeInsets.all(20),
+  Widget _buildDesktopBody() {
+    return Row(
+      children: [
+        SizedBox(width: 380, child: _cartPanel()),
+        const VerticalDivider(width: 1),
+        Expanded(child: _productsPanel()),
+      ],
+    );
+  }
+
+  Widget _buildMobileBody() {
+    return Stack(
+      children: [
+        _productsPanel(),
+        Positioned(
+          bottom: 0,
+          left: 0,
+          right: 0,
+          child: _mobileCartSummary(),
+        ),
+      ],
+    );
+  }
+
+  Widget _mobileCartSummary() {
+    final total = calculateTotal();
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 16,
+            offset: const Offset(0, -4),
+          )
+        ],
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            Container(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: primaryColor,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '${cartItems.length} items',
+                style: const TextStyle(
                     color: Colors.white,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        Text("Payment method:"),
-                        SizedBox(height: 4),
-                        Column(
-                          children: [
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    borderRadius: BorderRadius.circular(24),
-                                    dropdownColor: Colors.white,
-                                    isDense: true,
-                                    value: selectedPaymentMethod,
-                                    items: const [
-                                      DropdownMenuItem(
-                                        value: "Cash",
-                                        child: Text("Cash"),
-                                      ),
-                                      DropdownMenuItem(
-                                        value: "Online",
-                                        child: Text("Online"),
-                                      ),
-                                    ],
-                                    onChanged: (val) {
-                                      setState(() => selectedPaymentMethod = val!);
-                                    },
-                                    decoration: InputDecoration(
-                                      border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(width: 12),
-                                // New Toggle for Personal Use
-                                Expanded(
-                                  child: _buildTextField(
-                                    _discountController,
-                                    "Discount",
-                                    onChange: (v) {
-                                      calculateTotal();
-                                    },
-                                  ),
-                                ),
-                                SizedBox(width: 12),
-                                // New Toggle for Personal Use
-                                Expanded(
-                                  child: _buildTextField(
-                                    _extraPurchaseController,
-                                    "Misc. Expense",
-                                    onChange: (v) {
-                                      calculateTotal();
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-
-                        SizedBox(height: 12),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text("Total:", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                            Text("₹${calculateTotal()}", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.green[700])),
-                          ],
-                        ),
-                        SizedBox(height: 10),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: () {
-                                  processCheckOut();
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.blueGrey,
-                                  minimumSize: Size(double.infinity, 50),
-                                ),
-                                child: Text(
-                                  "Save",
-                                  style: TextStyle(color: Colors.white),
-                                ),
-                              ),
-                            ),
-                            SizedBox(width: 12),
-                            IconButton(
-                              onPressed: () async {
-                                double finalTotal = calculateTotal();
-                                double savedAmount = savedAmountTotal();
-                                List<Map<String, dynamic>> itemsToPrint =
-                                    List.from(
-                                      cartItems,
-                                    ); // Copy items before clearing
-
-                                String invId =
-                                    "INV_${printDate(date: DateTime.now().toString(), format: "ddmmyyhhmmss")}";
-                                try {
-                                  await _printerService.printReceipt(
-                                    invId: invId,
-                                    cartItems: itemsToPrint,
-                                    total: finalTotal,
-                                    savedOnMRP: savedAmount,
-                                    paymentMethod: selectedPaymentMethod,
-                                    extraCharges: {},
-                                  );
-                                } catch (e) {}
-                              },
-                              icon: Icon(Icons.print_outlined),
-                            ),
-                            IconButton(
-                                onPressed:
-                                    (){
-                                      // processCheckOut();
-                                      // 1. Attempt to print
-                                      double finalTotal = calculateTotal();
-                                      double savedAmount = savedAmountTotal();
-                                      List<Map<String, dynamic>> itemsToPrint =
-                                      List.from(
-                                        cartItems,
-                                      ); // Copy items before clearing
-
-                                      String invId =
-                                          "INV_${printDate(date: DateTime.now().toString(), format: "ddmmyyhhmmss")}";
-
-                                  String itemsText = itemsToPrint.asMap().entries.map((entry) {
-                                    int index = entry.key + 1; // Sr No starts from 1
-                                    var item = entry.value;
-                                    return "$index. ${item['name']} x ${item['qty']} = ₹${item['selling_price']}";
-                                  }).join("\n");
-                                  String billMessage = """
-*${superMarketTitle}*
-$billAddress
-$telNumber
-------------------------------
-Bill No: ${invId}
-Date: ${DateFormat('dd-MM-yyyy HH:mm').format(DateTime.now())}
-Payment: ${selectedPaymentMethod}
-------------------------------
-*Items:*
-
-$itemsText
-------------------------------
-*TOTAL: ₹${finalTotal.toStringAsFixed(2)}*
-------------------------------
-*Saved ₹${savedAmount.toStringAsFixed(2)} on MRP*
-------------------------------
-Thank you for shopping!
-""";
-
-                                  showWhatsAppDialog(context, billMessage);
-                                }, icon: Icon(Icons.message)),
-                               IconButton(
-                                onPressed:
-                                    (){
-                                  showDialog(context: context, builder: (context) {
-                                    return Stack(
-                                      children: [
-                                        Center(
-                                          child:Image.asset("assets/logo.png",),
-                                        ),
-                                        Positioned(
-                                          top: 24,
-                                          right: 24,
-                                          child: IconButton(onPressed: () {
-                                            Navigator.of(context).pop();
-                                          }, icon: Icon(Icons.close_outlined,color: Colors.red,)),
-                                        )
-                                      ],
-                                    );
-                                  },);
-                                }, icon: Icon(Icons.qr_code_sharp)),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13),
               ),
             ),
-          ),
+            const Spacer(),
+            Text(
+              '₹${total.toStringAsFixed(2)}',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: primaryColor),
+            ),
+            const SizedBox(width: 12),
+            ElevatedButton(
+              onPressed: () => _showCartSheet(),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: secondaryColor,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('View Cart'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-          VerticalDivider(width: 1),
+  void _showCartSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.85,
+        maxChildSize: 0.95,
+        builder: (_, ctrl) => _cartPanel(scrollCtrl: ctrl),
+      ),
+    );
+  }
 
-          // --- RIGHT SIDE: PRODUCT LISTING ---
-          Expanded(
-            flex: 3,
-            child: Column(
-              children: [
-                // Search Bar
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: TextField(
-                    controller: searchController,
-                    focusNode: searchFocusNode,
-                    autofocus: true,
-                    onSubmitted: (value) async {
-                      try {
-                        final result = await FirebaseFirestore.instance
-                            .collection("products")
-                            .where("barcode", isEqualTo: searchController.text)
-                            .get();
-                        result.docs.forEach((element) {
-                          addToCart(element.data());
-                          searchController.clear();
-                        });
-                        // 🔥 Keep focus after submit
-                        FocusScope.of(context).requestFocus(searchFocusNode);
-                      } catch (e) {}
-                    },
-                    onChanged: (value) {
-                      // 1. If there's an active timer, cancel it
-                      if (_debounce?.isActive ?? false) _debounce!.cancel();
-                      // 2. Set a new timer
-                      _debounce = Timer(const Duration(milliseconds: 500), () {
-                        // 3. This only runs if the user stops typing for 500ms
-                        searchProduct();
-                      });
-                      // searchProduct();
-                    },
-                    decoration: InputDecoration(
-                      hintText: "Search Product...",
-                      prefixIcon: Icon(Icons.search),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(30),
+  Widget _cartPanel({ScrollController? scrollCtrl}) {
+    return StatefulBuilder(
+      builder: (context, setSheetState) {
+        void updateCart(VoidCallback fn) {
+          setState(fn);
+          setSheetState(() {});
+        }
+
+        return Container(
+          color: const Color(0xFFF8FAFC),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 14),
+                color: Colors.white,
+                child: Row(
+                  children: [
+                    Icon(Icons.shopping_cart_rounded, color: primaryColor),
+                    const SizedBox(width: 8),
+                    Text('Current Sale',
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: primaryColor)),
+                    const Spacer(),
+                    if (cartItems.isNotEmpty)
+                      TextButton(
+                        onPressed: () => updateCart(() => cartItems.clear()),
+                        child: const Text('Clear',
+                            style: TextStyle(color: Colors.red)),
                       ),
-                    ),
-                  ),
+                  ],
                 ),
-                SizedBox(
-                  height: 40,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                    child: Row(
-                      children: [
-                        GestureDetector(
-                          onTap: () {
-                            selectedCategory = null;
-                            fetchProduct();
-                          },
-                          child: Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 4,
-                            ),
-                            margin: EdgeInsets.only(right: 8),
-                            decoration: BoxDecoration(
-                              color: selectedCategory == null
-                                  ? primaryColor
-                                  : null,
-                              // border: Border.all(color: primaryColor),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Center(
-                              child: Text(
-                                "All",
-                                style: TextStyle(
-                                  fontWeight: selectedCategory == null
-                                      ? FontWeight.bold
-                                      : null,
-                                  color: selectedCategory == null
-                                      ? Colors.white
-                                      : null,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        Container(color: Colors.blueGrey, height: 30, width: 1),
-                        Expanded(
-                          child: ListView.builder(
-                            scrollDirection: Axis.horizontal,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 0.0,
-                            ),
-                            itemCount: categoryList.length,
-                            itemBuilder: (context, index) {
-                              return GestureDetector(
-                                onTap: () {
-                                  selectedCategory =
-                                      categoryList[index]['category'];
-                                  fetchProduct();
-                                },
-                                child: Container(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 4,
-                                  ),
-                                  margin: EdgeInsets.symmetric(horizontal: 8),
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: primaryColor),
-                                    borderRadius: BorderRadius.circular(12),
-                                    color:
-                                        selectedCategory ==
-                                            categoryList[index]['category']
-                                        ? primaryColor
-                                        : null,
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      categoryList[index]['category']
-                                          .toString(),
-                                      style: TextStyle(
-                                        fontWeight:
-                                            selectedCategory ==
-                                                categoryList[index]['category']
-                                            ? FontWeight.bold
-                                            : null,
-                                        color:
-                                            selectedCategory ==
-                                                categoryList[index]['category']
-                                            ? Colors.white
-                                            : null,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: cartItems.isEmpty
+                    ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.shopping_cart_outlined,
+                          size: 60,
+                          color: Colors.grey.withOpacity(0.4)),
+                      const SizedBox(height: 12),
+                      const Text('Cart is empty',
+                          style: TextStyle(color: Colors.grey)),
+                    ],
                   ),
+                )
+                    : ListView.builder(
+                  controller: scrollCtrl ?? _itemsScrollCtrl,
+                  padding: const EdgeInsets.all(12),
+                  itemCount: cartItems.length,
+                  itemBuilder: (_, index) =>
+                      _cartItem(index, onUpdate: updateCart),
                 ),
-                // Product Grid
-                Expanded(
-                  child: ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(16),
-                    itemCount: products.length + (_hasMore ? 1 : 0),
-                    // Handle pagination loader
-                    itemBuilder: (context, index) {
-                      if (index == products.length) {
-                        if (products.length == 0) {
-                          return Text("No Data Found");
-                        }
-                        return const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(8.0),
-                            child: CircularProgressIndicator(),
-                          ),
-                        );
-                      }
+              ),
+              _checkoutPanel(onUpdate: updateCart),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
-                      final product = products[index];
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12.0),
-                        child: Card(
-                          elevation: 2,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: ListTile(
-                            onTap: () => addToCart(product),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 4,
-                            ),
-                            title: Text(
-                              product['name'],
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            subtitle: Text(
-                              "Barcode: ${product['barcode'] ?? 'N/A'}",
-                            ),
-                            trailing: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(
-                                  "₹${product['selling_price']}",
-                                  style: const TextStyle(
-                                    color: Colors.blue,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                                Text(
-                                  "Stock: ${product['stock']}",
-                                  style: TextStyle(
-                                    color: (product['stock'] ?? 0) < 10
-                                        ? Colors.red
-                                        : Colors.grey[600],
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+  Widget _cartItem(int index,
+      {required void Function(VoidCallback) onUpdate}) {
+    final item = cartItems[index];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 8,
+              offset: const Offset(0, 2))
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 26,
+            height: 26,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.green.withOpacity(0.15),
+            ),
+            child: Center(
+              child: Text('${index + 1}',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green[700])),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(item['name'],
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 13),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Text('₹${item['selling_price']} × ',
+                        style:
+                        const TextStyle(fontSize: 12, color: Colors.grey)),
+                    InputQty(
+                      key: ValueKey('${item['id']}_${item['qty']}'),
+                      maxVal: 999,
+                      initVal: item['qty'],
+                      minVal: 1,
+                      steps: 1,
+                      onQtyChanged: (val) {
+                        onUpdate(() => cartItems[index]['qty'] = val);
+                      },
+                    ),
+                  ],
                 ),
               ],
             ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                icon: const Icon(Icons.close_rounded,
+                    color: Colors.red, size: 18),
+                onPressed: () => onUpdate(() => cartItems.removeAt(index)),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '₹${_getLineItemTotal(item).toStringAsFixed(0)}',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: primaryColor,
+                    fontSize: 14),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  void fetchProduct({bool isLoadMore = false}) async {
+  Widget _checkoutPanel({void Function(VoidCallback)? onUpdate}) {
+    void update(VoidCallback fn) =>
+        onUpdate != null ? onUpdate(fn) : setState(fn);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _selectedPaymentMethod,
+                  isDense: true,
+                  dropdownColor: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  decoration: InputDecoration(
+                    labelText: 'Payment',
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 10),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: "Cash", child: Text("Cash")),
+                    DropdownMenuItem(
+                        value: "Online", child: Text("Online")),
+                  ],
+                  onChanged: (v) => update(() => _selectedPaymentMethod = v!),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: _miniTextField(_discountController, 'Discount')),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: _miniTextField(_extraPurchaseController, 'Misc.')),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('TOTAL',
+                  style:
+                  TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+              Text(
+                '₹${calculateTotal().toStringAsFixed(2)}',
+                style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green[700]),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _processCheckOut,
+                  icon: const Icon(Icons.save_rounded, size: 18),
+                  label: const Text('Save Bill'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primaryColor,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _iconBtn(Icons.print_outlined, () async {
+                try {
+                  await _printerService.printReceipt(
+                    invId:
+                    "INV_${printDate(date: DateTime.now().toString(), format: "ddmmyyhhmmss")}",
+                    cartItems: List.from(cartItems),
+                    total: calculateTotal(),
+                    savedOnMRP: _savedAmountTotal(),
+                    paymentMethod: _selectedPaymentMethod,
+                    extraCharges: {},
+                  );
+                } catch (_) {}
+              }),
+              const SizedBox(width: 4),
+              _iconBtn(Icons.message_outlined, () {
+                final total = calculateTotal();
+                final saved = _savedAmountTotal();
+                final invId =
+                    "INV_${printDate(date: DateTime.now().toString(), format: "ddmmyyhhmmss")}";
+                final itemsText = cartItems
+                    .asMap()
+                    .entries
+                    .map((e) =>
+                '${e.key + 1}. ${e.value['name']} x ${e.value['qty']} = ₹${e.value['selling_price']}')
+                    .join('\n');
+                final msg =
+                    '*$superMarketTitle*\n$billAddress\n$telNumber\n'
+                    '------------------------------\n'
+                    'Bill No: $invId\nDate: ${DateFormat('dd-MM-yyyy HH:mm').format(DateTime.now())}\n'
+                    'Payment: $_selectedPaymentMethod\n'
+                    '------------------------------\n*Items:*\n$itemsText\n'
+                    '------------------------------\n*TOTAL: ₹${total.toStringAsFixed(2)}*\n'
+                    '------------------------------\n*Saved ₹${saved.toStringAsFixed(2)} on MRP*\n'
+                    '------------------------------\nThank you for shopping!';
+                showWhatsAppDialog(context, msg);
+              }),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _iconBtn(IconData icon, VoidCallback onTap) {
+    return Material(
+      color: const Color(0xFFF1F5F9),
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Icon(icon, size: 20, color: primaryColor),
+        ),
+      ),
+    );
+  }
+
+  Widget _miniTextField(TextEditingController ctrl, String label) {
+    return TextFormField(
+      controller: ctrl,
+      keyboardType: TextInputType.number,
+      decoration: InputDecoration(
+        labelText: label,
+        border:
+        OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding:
+        const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        isDense: true,
+      ),
+      onChanged: (_) => setState(() {}),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // Products panel
+  // ✅ FIX 4: Category chip — selectedCategory must be set INSIDE setState
+  //           before calling _fetchProduct(), otherwise Firestore query runs
+  //           with the OLD value of selectedCategory
+  // ══════════════════════════════════════════════════════════
+  Widget _productsPanel() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+          child: TextField(
+            controller: _searchController,
+            focusNode: _searchFocusNode,
+            autofocus: true,
+            onSubmitted: (_) async {
+              try {
+                final result = await FirebaseFirestore.instance
+                    .collection("products")
+                    .where("barcode",
+                    isEqualTo: _searchController.text)
+                    .where("is_active", isEqualTo: true)
+                    .get();
+                for (var doc in result.docs) {
+                  _addToCart(doc.data());
+                }
+                _searchController.clear();
+                FocusScope.of(context).requestFocus(_searchFocusNode);
+              } catch (_) {}
+            },
+            onChanged: (value) {
+              if (_debounce?.isActive ?? false) _debounce!.cancel();
+
+              _debounce = Timer(
+                const Duration(milliseconds: 400),
+                    () => _searchProduct(value), // ✅ value pass karo
+              );
+            },
+            decoration: InputDecoration(
+              hintText: 'Search by name / barcode...',
+              prefixIcon: const Icon(Icons.search_rounded),
+              filled: true,
+              fillColor: Colors.white,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(30),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(30),
+                borderSide:
+                const BorderSide(color: Color(0xFFE0E8F0), width: 1),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(30),
+                borderSide: BorderSide(color: primaryColor, width: 1.5),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 20, vertical: 12),
+            ),
+          ),
+        ),
+        // Category chips
+        SizedBox(
+          height: 40,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                // ✅ FIX 4: "All" chip — set selectedCategory=null inside setState
+                // then call _fetchProduct AFTER setState completes
+                _categoryChip('All', selectedCategory == null, () {
+                  setState(() => selectedCategory = null);
+                  _fetchProduct();
+                }),
+                ...categoryList.map((cat) => _categoryChip(
+                  cat['category'].toString(),
+                  selectedCategory == cat['category'],
+                      () {
+                    setState(() => selectedCategory = cat['category']);
+                    _fetchProduct();
+                  },
+                )),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: ListView.builder(
+            controller: _scrollController,
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+            itemCount: products.length + (_hasMore ? 1 : 0),
+            itemBuilder: (_, index) {
+              if (index == products.length) {
+                if (products.isEmpty) {
+                  return const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Text('No products found',
+                          style: TextStyle(color: Colors.grey)),
+                    ),
+                  );
+                }
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator(),
+                  ),
+                );
+              }
+              return _productCard(products[index]);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _categoryChip(String label, bool selected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        margin: const EdgeInsets.only(right: 8),
+        padding:
+        const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? primaryColor : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+              color: selected ? primaryColor : const Color(0xFFDDE4ED)),
+          boxShadow: selected
+              ? [
+            BoxShadow(
+              color: primaryColor.withOpacity(0.2),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            )
+          ]
+              : null,
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight:
+            selected ? FontWeight.bold : FontWeight.normal,
+            color: selected ? Colors.white : Colors.grey[700],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _productCard(Map<String, dynamic> product) {
+    final int stock = product['stock'] ?? 0;
+    final bool lowStock = stock < 10;
+    return Card(
+      elevation: 0,
+      color: Colors.white,
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: Color(0xFFE8EDF2), width: 1),
+      ),
+      child: ListTile(
+        onTap: () => _addToCart(product),
+        contentPadding:
+        const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        title: Text(
+          product['name'],
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+              fontWeight: FontWeight.w600, fontSize: 14),
+        ),
+        subtitle: Text(
+          'Barcode: ${product['barcode'] ?? 'N/A'}',
+          style: const TextStyle(fontSize: 12),
+        ),
+        trailing: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              '₹${product['selling_price']}',
+              style: TextStyle(
+                  color: primaryColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16),
+            ),
+            const SizedBox(height: 2),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (lowStock)
+                  Container(
+                    margin: const EdgeInsets.only(right: 6),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text('Low',
+                        style: TextStyle(
+                            color: Colors.red, fontSize: 10)),
+                  ),
+                Text(
+                  'Stock: $stock',
+                  style: TextStyle(
+                      color:
+                      lowStock ? Colors.red : Colors.grey[600],
+                      fontSize: 12),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _fetchProduct({bool isLoadMore = false}) async {
     if (_isLoading || (isLoadMore && !_hasMore)) return;
 
     setState(() => _isLoading = true);
 
-    // Reset when NOT loading more (new category / refresh)
-    if (!isLoadMore) {
-      products.clear();
-      _lastDocument = null;
-      _hasMore = true;
-    }
-
     try {
-      Query query = FirebaseFirestore.instance.collection("products");
+      Query<Map<String, dynamic>> query =
+      FirebaseFirestore.instance.collection("products");
 
-      // Base condition
+      // 🔹 Base filter
       query = query.where("is_active", isEqualTo: true);
 
-      // Category condition
-      if (selectedCategory != null && selectedCategory!.isNotEmpty) {
-        query = query.where("category", isEqualTo: selectedCategory);
+      // 🔹 Category filter
+      if (selectedCategory != null && selectedCategory!.trim().isNotEmpty) {
+        final category = selectedCategory!.trim();
+        query = query.where("category", isEqualTo: category);
       }
 
-      // Order + Pagination
-      query = query.orderBy("name").limit(_pageSize);
+      // 🔹 Sorting (IMPORTANT: requires index)
+      query = query.orderBy("name");
+
+      // 🔹 Pagination
+      query = query.limit(_pageSize);
 
       if (isLoadMore && _lastDocument != null) {
         query = query.startAfterDocument(_lastDocument!);
       }
 
-      // Execute query
-      QuerySnapshot querySnapshot = await query.get();
+      final snap = await query.get();
 
-      if (querySnapshot.docs.isNotEmpty) {
-        _lastDocument = querySnapshot.docs.last;
+      // 🔹 First load reset
+      if (!isLoadMore) {
+        products.clear();
+      }
+
+      if (snap.docs.isNotEmpty) {
+        _lastDocument = snap.docs.last;
+
+        final newProducts = snap.docs
+            .map((doc) => doc.data())
+            .toList();
 
         setState(() {
-          for (var doc in querySnapshot.docs) {
-            products.add(doc.data() as Map<String, dynamic>);
-          }
+          products.addAll(newProducts);
         });
       }
 
-      // Check if more data available
-      if (querySnapshot.docs.length < _pageSize) {
+      // 🔹 Check end
+      if (snap.docs.length < _pageSize) {
         _hasMore = false;
       }
-    } catch (e) {
-      print("Pagination Error: $e");
+    } catch (e, st) {
+      debugPrint("❌ Firestore Fetch Error: $e");
+      debugPrintStack(stackTrace: st);
+
+      // Optional: show UI error
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Failed to load products")),
+        );
+      }
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -811,298 +966,108 @@ Thank you for shopping!
     }
   }
 
-
-  void _showLoadingDialog(BuildContext context) {
+  void _showLoadingDialog() {
     showDialog(
       context: context,
-      barrierDismissible: false, // User cannot tap outside to close it
-      builder: (BuildContext context) {
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(15),
+      barrierDismissible: false,
+      builder: (_) => const Dialog(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(width: 20),
+              Text('Processing Sale...'),
+            ],
           ),
-          child: Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const CircularProgressIndicator(),
-                const SizedBox(width: 20),
-                const Text(
-                  "Processing Sale...",
-                  style: TextStyle(fontSize: 16),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+        ),
+      ),
     );
   }
 
-  void processCheckOut() async {
-    if(cartItems.isEmpty)return toast("Enter Valid Entries");
+  void _processCheckOut() async {
+    if (cartItems.isEmpty) return toast("Add items to cart");
     if (widget.docId != null) {
-      double finalTotal = calculateTotal();
-      double savedAmount = savedAmountTotal();
-      String invId = widget.saleData!['inv_id'];
-      // 🔥 1. Get OLD DATA
-      DocumentSnapshot oldDoc = await FirebaseFirestore.instance
+      final double finalTotal = calculateTotal();
+      final double savedAmount = _savedAmountTotal();
+      final String invId = widget.saleData!['inv_id'];
+      final oldDoc = await FirebaseFirestore.instance
           .collection("sales")
           .doc(widget.docId)
           .get();
-
-      List oldOrders = (oldDoc.data() as Map)['order'] ?? [];
-
-      // 🔥 2. CREATE MAP (id -> qty)
-      Map<String, num> oldQtyMap = {};
+      final List oldOrders =
+          (oldDoc.data() as Map)['order'] ?? [];
+      final Map<String, num> oldQtyMap = {};
       for (var item in oldOrders) {
-        oldQtyMap[item['id']] = (item['qty'] ?? 0);
+        oldQtyMap[item['id']] = item['qty'] ?? 0;
       }
-
-      Map<String, num> newQtyMap = {};
-      double billProfit=0.0;
+      final Map<String, num> newQtyMap = {};
+      double billProfit = 0;
       for (var item in cartItems) {
-        newQtyMap[item['id']] = (item['qty'] ?? 0);
-        double sellPrice=double.tryParse(item['selling_price'].toString())??0.0;
-        double costPrice=double.tryParse(item['cost_price'].toString())??0.0;
-        double profit=sellPrice-costPrice;
-        double totalProfit=profit*(item['qty'] as num);
-        billProfit+=totalProfit;
+        newQtyMap[item['id']] = item['qty'] ?? 0;
+        final double sp =
+            double.tryParse(item['selling_price'].toString()) ?? 0;
+        final double cp =
+            double.tryParse(item['cost_price'].toString()) ?? 0;
+        billProfit += (sp - cp) * (item['qty'] as num);
       }
-
-      // _extraPurchaseController
-      // 🔥 3. UPDATE SALE
       await FirebaseFirestore.instance
           .collection("sales")
           .doc(widget.docId)
           .update({
-            "order": cartItems,
-            "total": finalTotal,
-            "saved_on_mrp": savedAmount,
-            "date": Timestamp.fromDate(DateTime.now()),
-            "inv_id": invId,
-            "extra_purchase_amount": double.tryParse(_extraPurchaseController.text)??0.0,
-            "profit": billProfit,
-            "payment_method": selectedPaymentMethod,
-          });
-
-      // 🔥 4. HANDLE STOCK DIFFERENCE
-      Set<String> allProductIds = {...oldQtyMap.keys, ...newQtyMap.keys};
-
-      for (var productId in allProductIds) {
-        num oldQty = oldQtyMap[productId] ?? 0;
-        num newQty = newQtyMap[productId] ?? 0;
-
-        num diff = newQty - oldQty;
-
+        "order": cartItems,
+        "total": finalTotal,
+        "saved_on_mrp": savedAmount,
+        "date": Timestamp.fromDate(DateTime.now()),
+        "inv_id": invId,
+        "extra_purchase_amount":
+        double.tryParse(_extraPurchaseController.text) ?? 0.0,
+        "profit": billProfit,
+        "payment_method": _selectedPaymentMethod,
+      });
+      final allIds = {...oldQtyMap.keys, ...newQtyMap.keys};
+      for (var id in allIds) {
+        final diff =
+            (newQtyMap[id] ?? 0) - (oldQtyMap[id] ?? 0);
         if (diff != 0) {
           await FirebaseFirestore.instance
               .collection("products")
-              .doc(productId)
+              .doc(id)
               .update({'stock': FieldValue.increment(-diff)});
         }
       }
+      if (mounted) Navigator.pop(context);
     } else {
-      double finalTotal = calculateTotal();
-      double savedAmount = savedAmountTotal();
-      List<Map<String, dynamic>> itemsToPrint = List.from(
-        cartItems,
-      ); // Copy items before clearing
-      _showLoadingDialog(context);
-      String invId =
+      final double finalTotal = calculateTotal();
+      final double savedAmount = _savedAmountTotal();
+      _showLoadingDialog();
+      final String invId =
           "INV_${printDate(date: DateTime.now().toString(), format: "ddmmyyhhmmss")}";
-      FirebaseFirestore.instance
-          .collection("sales")
-          .add({
-            "order": cartItems,
-            "total": finalTotal,
-            "saved_on_mrp": savedAmount,
-            "date": Timestamp.fromDate(DateTime.now()),
-            "inv_id": invId,
-            "payment_method": selectedPaymentMethod,
-          })
-          .then((value) async {
-            for (var element in cartItems) {
-              await FirebaseFirestore.instance
-                  .collection("products")
-                  .doc(element['id'])
-                  .update({
-                    'stock': FieldValue.increment(-(element['qty'] as num)),
-                  });
-            }
-            toast("Bill Saved");
-            // 4. Success! Close Loader and Reset UI
-            Navigator.of(context).pop(); // This closes the Loading Dialog
-            // 2. Clear UI
-            setState(() {
-              cartItems.clear();
-              _discountController.text="";
-              _extraPurchaseController.text="";
-            });
+      await FirebaseFirestore.instance.collection("sales").add({
+        "order": cartItems,
+        "total": finalTotal,
+        "saved_on_mrp": savedAmount,
+        "date": Timestamp.fromDate(DateTime.now()),
+        "inv_id": invId,
+        "payment_method": _selectedPaymentMethod,
+      }).then((doc) async {
+        for (var item in cartItems) {
+          await FirebaseFirestore.instance
+              .collection("products")
+              .doc(item['id'])
+              .update({'stock': FieldValue.increment(-(item['qty'] as num))});
+        }
+        toast("Bill Saved Successfully");
+        if (mounted) {
+          Navigator.of(context).pop();
+          setState(() {
+            cartItems.clear();
+            _discountController.clear();
+            _extraPurchaseController.clear();
           });
+        }
+      });
     }
   }
-
-  double getLineItemTotal(Map item) {
-    double unitPrice = (item['selling_price'] ?? 0).toDouble();
-    int qty = item['qty'] ?? 0;
-    return qty * unitPrice;
-  }
-
-  Widget _buildTextField(
-    TextEditingController controller,
-    String label, {
-    bool isNumber = false,
-    int maxLines = 1,
-    bool? optional,
-    bool? autoFocus,
-    var onChange,
-  }) {
-    return TextFormField(
-      autofocus: autoFocus ?? false,
-      controller: controller,
-      inputFormatters: [if (isNumber) FilteringTextInputFormatter.digitsOnly],
-      keyboardType: isNumber ? TextInputType.number : TextInputType.text,
-      maxLines: maxLines,
-      decoration: InputDecoration(
-        labelText: label,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-      onChanged: (value) {
-        setState(() {
-          onChange(value);
-        });
-      },
-    );
-  }
-
-  Future<Map<String, String>?> showExtraChargeDialog(BuildContext context) async {
-    TextEditingController titleController = TextEditingController();
-    TextEditingController valueController = TextEditingController();
-
-    return await showDialog<Map<String, String>>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          title: Text("Add Extra Purchase"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleController,
-                autofocus: true,
-                decoration: InputDecoration(
-                  labelText: "Title",
-                  hintText: "e.g. Delivery Charge",
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              SizedBox(height: 12),
-              TextField(
-                controller: valueController,
-                keyboardType: TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(
-                  labelText: "Amount",
-                  hintText: "e.g. 50",
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context, null);
-              },
-              child: Text("Cancel"),
-            ),
-            MaterialButton(
-              color: primaryColor,
-              shape: RoundedRectangleBorder(
-
-              ),
-              onPressed: () {
-                if (titleController.text.trim().isEmpty ||
-                    valueController.text.trim().isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("Please enter all fields")),
-                  );
-                  return;
-                }
-
-                Navigator.pop(context, {
-                  "title": titleController.text.trim(),
-                  "value": valueController.text.trim(),
-                });
-              },
-              child: Text("Add"),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _showAddProductDialog({var onSave}) async {
-    final TextEditingController titleController = TextEditingController();
-    final TextEditingController amountController = TextEditingController();
-
-    return showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Add Extra Charges'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min, // Prevents the dialog from taking full screen
-            children: [
-              TextField(
-                autofocus: true,
-                controller: titleController,
-                decoration: const InputDecoration(
-                  labelText: 'Product Title',
-                  hintText: 'e.g. Wireless Mouse',
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: amountController,
-                keyboardType: TextInputType.number, // Opens numeric keyboard
-                decoration: const InputDecoration(
-                  labelText: 'Amount',
-                  hintText: '0.00',
-                  prefixText: '',
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context), // Close without saving
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                // 2. Access the data using .text
-                final String title = titleController.text;
-                final String amount = amountController.text;
-
-                if (title.isNotEmpty && amount.isNotEmpty) {
-                  print('Product: $title, Amount: $amount');
-
-                  // Perform your logic here (e.g., add to list or database)
-
-                  Navigator.pop(context); // Close dialog
-                  onSave(title,amount);
-                }
-              },
-              child: const Text('Add'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
 }
