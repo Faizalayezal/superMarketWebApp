@@ -6,12 +6,18 @@ import 'package:shivam_super_market/screens/product/product.dart';
 import 'package:shivam_super_market/screens/sales/earnings.dart';
 import 'package:shivam_super_market/screens/settings/settings_screen.dart';
 
-// ── Nav destination model ─────────────────────────────────────
+const double kMobileBreak = 600;
+const double kTabletBreak = 900;
+
+// ─────────────────────────────────────────────────────────────
+// NavItem model
+// ─────────────────────────────────────────────────────────────
 class _NavItem {
   final String label;
   final IconData icon;
   final IconData activeIcon;
   final Widget screen;
+
   const _NavItem({
     required this.label,
     required this.icon,
@@ -20,45 +26,12 @@ class _NavItem {
   });
 }
 
-// ── Destinations list ─────────────────────────────────────────
-final List<_NavItem> _navItems = [
-  _NavItem(
-    label: 'Dashboard',
-    icon: Icons.home_outlined,
-    activeIcon: Icons.home_rounded,
-    screen: const HomeScreen(),
-  ),
-  _NavItem(
-    label: 'POS',
-    icon: Icons.point_of_sale_outlined,
-    activeIcon: Icons.point_of_sale_rounded,
-    screen: const POSSaleScreen(),
-  ),
-  _NavItem(
-    label: 'Products',
-    icon: Icons.inventory_2_outlined,
-    activeIcon: Icons.inventory_2_rounded,
-    screen: const ProductView(),
-  ),
-  _NavItem(
-    label: 'Sales',
-    icon: Icons.bar_chart_outlined,
-    activeIcon: Icons.bar_chart_rounded,
-    screen: PaginatedSalesScreen(),
-  ),
-  _NavItem(
-    label: 'Settings',
-    icon: Icons.settings_outlined,
-    activeIcon: Icons.settings_rounded,
-    screen: const StoreSettingsScreen(),
-  ),
-];
-
 // ══════════════════════════════════════════════════════════════
 // AppShell
 // ══════════════════════════════════════════════════════════════
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
+
   @override
   State<AppShell> createState() => _AppShellState();
 }
@@ -66,17 +39,62 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _selectedIndex = 0;
 
+  // ✅ FIX: _navItems defined as late final inside State — created ONCE.
+  // Previously it was a top-level list, so every build() call of LayoutBuilder
+  // created fresh widget instances → IndexedStack saw new objects → screens
+  // remounted → initState ran again → data reloaded.
+  late final List<_NavItem> _navItems;
+
+  @override
+  void initState() {
+    super.initState();
+    _navItems = [
+      const _NavItem(
+        label: 'Dashboard',
+        icon: Icons.home_outlined,
+        activeIcon: Icons.home_rounded,
+        screen: HomeScreen(),
+      ),
+      const _NavItem(
+        label: 'POS',
+        icon: Icons.point_of_sale_outlined,
+        activeIcon: Icons.point_of_sale_rounded,
+        screen: POSSaleScreen(),
+      ),
+      const _NavItem(
+        label: 'Products',
+        icon: Icons.inventory_2_outlined,
+        activeIcon: Icons.inventory_2_rounded,
+        screen: ProductView(),
+      ),
+      _NavItem(
+        label: 'Sales',
+        icon: Icons.bar_chart_outlined,
+        activeIcon: Icons.bar_chart_rounded,
+        screen: PaginatedSalesScreen(),
+      ),
+      const _NavItem(
+        label: 'Settings',
+        icon: Icons.settings_outlined,
+        activeIcon: Icons.settings_rounded,
+        screen: StoreSettingsScreen(),
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isMobile = constraints.maxWidth < kMobileBreak;
-        return isMobile ? _buildMobile() : _buildDesktop(constraints.maxWidth);
+        return isMobile
+            ? _buildMobile()
+            : _buildDesktop(constraints.maxWidth);
       },
     );
   }
 
-  // ── MOBILE layout ─────────────────────────────────────────
+  // ── MOBILE layout ────────────────────────────────────────────
   Widget _buildMobile() {
     return Scaffold(
       backgroundColor: backgroundColor,
@@ -113,13 +131,13 @@ class _AppShellState extends State<AppShell> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.notifications_outlined, color: Colors.white),
+            icon:
+            const Icon(Icons.notifications_outlined, color: Colors.white),
             onPressed: () {},
           ),
           const SizedBox(width: 4),
         ],
       ),
-      // ✅ FIX 1: IndexedStack preserves all screen states — no rebuild on tab switch
       body: _buildPageContent(),
       bottomNavigationBar: _MobileBottomNav(
         items: _navItems,
@@ -129,7 +147,7 @@ class _AppShellState extends State<AppShell> {
     );
   }
 
-  // ── DESKTOP / TABLET layout ───────────────────────────────
+  // ── DESKTOP / TABLET layout ──────────────────────────────────
   Widget _buildDesktop(double totalWidth) {
     final isWide = totalWidth >= kTabletBreak;
     return Scaffold(
@@ -142,17 +160,18 @@ class _AppShellState extends State<AppShell> {
             extended: isWide,
             onDestinationSelected: (i) => setState(() => _selectedIndex = i),
           ),
-          const VerticalDivider(width: 1, thickness: 1, color: Color(0xFFE0E8F0)),
-          // ✅ FIX 1: IndexedStack keeps all screens alive — resize won't reload data
+          const VerticalDivider(
+              width: 1, thickness: 1, color: Color(0xFFE0E8F0)),
           Expanded(child: _buildPageContent()),
         ],
       ),
     );
   }
 
-  // ✅ FIX 1 & 2: Replace AnimatedSwitcher+ValueKey with IndexedStack
-  // AnimatedSwitcher destroys the old widget when switching → state lost
-  // IndexedStack keeps all widgets in memory → state preserved on tab switch AND on resize
+  // ✅ FIX: IndexedStack with the SAME widget instances every time.
+  // Because _navItems is created once in initState, the same Widget objects
+  // are passed to IndexedStack on every build → Flutter sees no change →
+  // screens stay mounted → no data reload on resize or tab switch.
   Widget _buildPageContent() {
     return IndexedStack(
       index: _selectedIndex,
@@ -162,7 +181,7 @@ class _AppShellState extends State<AppShell> {
 }
 
 // ══════════════════════════════════════════════════════════════
-// _DesktopRail — unchanged
+// _DesktopRail
 // ══════════════════════════════════════════════════════════════
 class _DesktopRail extends StatelessWidget {
   final List<_NavItem> items;
@@ -270,7 +289,7 @@ class _DesktopRail extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════
-// _RailItem — unchanged
+// _RailItem
 // ══════════════════════════════════════════════════════════════
 class _RailItem extends StatelessWidget {
   final _NavItem item;
@@ -288,7 +307,8 @@ class _RailItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: extended ? 12 : 8, vertical: 2),
+      padding:
+      EdgeInsets.symmetric(horizontal: extended ? 12 : 8, vertical: 2),
       child: Material(
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(12),
@@ -323,7 +343,8 @@ class _RailItem extends StatelessWidget {
                 Text(
                   item.label,
                   style: TextStyle(
-                    color: isSelected ? secondaryColor : Colors.white60,
+                    color:
+                    isSelected ? secondaryColor : Colors.white60,
                     fontWeight: isSelected
                         ? FontWeight.bold
                         : FontWeight.normal,
@@ -361,7 +382,7 @@ class _RailItem extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════
-// _MobileBottomNav — unchanged
+// _MobileBottomNav
 // ══════════════════════════════════════════════════════════════
 class _MobileBottomNav extends StatelessWidget {
   final List<_NavItem> items;

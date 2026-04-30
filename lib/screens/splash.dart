@@ -1,10 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:shivam_super_market/screens/AppShell.dart';
-import 'package:shivam_super_market/screens/dashboard_screen.dart';
-import 'package:shivam_super_market/screens/login_screen.dart';
-import '../main.dart';
-
-import 'package:flutter/material.dart';
 import 'package:shivam_super_market/screens/login_screen.dart';
 import '../main.dart';
 

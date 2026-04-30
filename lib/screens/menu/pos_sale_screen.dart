@@ -5,11 +5,6 @@ import 'package:shivam_super_market/common_import.dart';
 import 'package:shivam_super_market/core/helper_function.dart';
 import 'package:shivam_super_market/core/services/printer_service.dart' show PrinterService;
 
-// ══════════════════════════════════════════════════════════════
-// POSSaleScreen
-// ✅ FIX 3: AutomaticKeepAliveClientMixin — survives IndexedStack + parent rebuilds
-// ✅ FIX 4: Category chip setState fix
-// ══════════════════════════════════════════════════════════════
 class POSSaleScreen extends StatefulWidget {
   final String? docId;
   final Map<String, dynamic>? saleData;
